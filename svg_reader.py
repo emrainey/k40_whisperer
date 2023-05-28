@@ -681,15 +681,17 @@ class SVG_READER(inkex.Effect):
                 # Check Version of Inkscape
                 cmd = [ self.inkscape_exe, "-V"]
                 (stdout,stderr)=run_external(cmd, self.timout)
+                print(f"Version?={stdout}")
                 if stdout.find(b'Inkscape 1.')==-1:
                     cmd = [ self.inkscape_exe, self.png_area, "--export-dpi", dpi, \
-                            "--export-background","rgb(255, 255, 255)","--export-background-opacity", \
+                            "--export-background","\'rgb(255, 255, 255)\'","--export-background-opacity", \
                             "255" ,"--export-png", png_temp_file, svg_temp_file ]
                 else:
                     cmd = [ self.inkscape_exe, self.png_area, "--export-dpi", dpi, \
-                            "--export-background","rgb(255, 255, 255)","--export-background-opacity", \
-                            "255" ,"--export-type=png", "--export-file", png_temp_file, svg_temp_file ]
-
+                            "--export-background","\'rgb(255, 255, 255)\'","--export-background-opacity", \
+                            "255" ,"--export-type=png", "--export-filename", png_temp_file, svg_temp_file ]
+                pcmd = " ".join(cmd)
+                print(f"Running command {pcmd}")
                 run_external(cmd, self.timout)
                 self.raster_PIL = Image.open(png_temp_file)
                 self.raster_PIL = self.raster_PIL.convert("L")
