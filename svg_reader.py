@@ -1,6 +1,6 @@
 #!/usr/bin/env python 
 '''
-Copyright (C) 2017-2019 Scorch www.scorchworks.com
+Copyright (C) 2017-2021 Scorch www.scorchworks.com
 Derived from dxf_outlines.py by Aaron Spike and Alvin Penner
 
 This program is free software; you can redistribute it and/or modify
@@ -50,7 +50,7 @@ def run_external(cmd, timeout_sec):
     stderr=None
     FLAG=[True]
     try:
-        proc = Popen(cmd, stdout=PIPE, stderr=PIPE)
+        proc = Popen(cmd, shell=False, stdout=PIPE, stderr=PIPE, stdin=PIPE, startupinfo=None)
     except Exception as e:
         raise Exception("\n%s\n\nExecutable Path:\n%s" %(e,cmd[0]))
     if timeout_sec > 0:
@@ -130,6 +130,8 @@ class SVG_READER(inkex.Effect):
         self.flatness = 0.01
         self.image_dpi = 1000
         self.inkscape_exe_list = []
+        self.inkscape_exe_list.append("C:\\Program Files\\Inkscape\\bin\\inkscape.exe")
+        self.inkscape_exe_list.append("C:\\Program Files (x86)\\Inkscape\\bin\\inkscape.exe")
         self.inkscape_exe_list.append("C:\\Program Files\\Inkscape\\inkscape.exe")
         self.inkscape_exe_list.append("C:\\Program Files (x86)\\Inkscape\\inkscape.exe")
         self.inkscape_exe_list.append("/usr/bin/inkscape")
@@ -166,6 +168,7 @@ class SVG_READER(inkex.Effect):
     def parse_svg(self,filename):
         try:
             self.parse(filename)
+            #self.parse(filename, encoding='utf-8')
         except Exception as e:
             exception_msg = "%s" %(e)
             if exception_msg.find("encoding"):
@@ -256,7 +259,7 @@ class SVG_READER(inkex.Effect):
         line2 = "Automatic conversion to paths failed: Try upgrading to Inkscape .90 or later"
         line3 = "To convert manually in Inkscape: select the text then select \"Path\"-\"Object to Path\" in the menu bar."
         text_message_fatal  = "%s\n\n%s\n\n%s" %(line1,line2,line3)
-        
+
         ##############################################
         ### Handle 'style' data outside of style   ###
         ##############################################
@@ -307,6 +310,10 @@ class SVG_READER(inkex.Effect):
                 if len(parts) == 2:
                     (prop, col) = parts
                     prop = prop.strip().lower()
+
+                    if prop == 'display' and col == "none":
+                        # display is 'none' return without processing group
+                        return
                     
                     if prop == 'k40_action':
                         changed = True
@@ -396,8 +403,15 @@ class SVG_READER(inkex.Effect):
                     cx=float(node.get('cx'))
                 if node.get('cy'):
                     cy=float(node.get('cy'))
-                r  = float(node.get('r'))
-                d  = "M %f,%f A   %f,%f 0 0 1 %f,%f   %f,%f 0 0 1 %f,%f   %f,%f 0 0 1 %f,%f   %f,%f 0 0 1 %f,%f Z" %(cx+r,cy, r,r,cx,cy+r,  r,r,cx-r,cy,  r,r,cx,cy-r, r,r,cx+r,cy)
+                if node.get('r'):
+                    r  = float(node.get('r'))
+                    d  = "M %f,%f A   %f,%f 0 0 1 %f,%f   %f,%f 0 0 1 %f,%f   %f,%f 0 0 1 %f,%f   %f,%f 0 0 1 %f,%f Z" %(cx+r,cy, r,r,cx,cy+r,  r,r,cx-r,cy,  r,r,cx,cy-r, r,r,cx+r,cy)
+                else: #if there is no radius assume it is a path
+                    if node.get('d'):
+                        d = node.get('d')
+                        p = cubicsuperpath.parsePath(d)
+                    else:
+                        raise Exception("Radius of SVG circle is not defined.")
                 p = cubicsuperpath.parsePath(d)
             
             elif node.tag == inkex.addNS('ellipse','svg'):
@@ -522,8 +536,10 @@ class SVG_READER(inkex.Effect):
         ##############################################
         ### Get color set at group level
         stroke_group = group.get('stroke')
+        if group.get('display')=='none':
+            return
         ##############################################
-        ### Handle 'style' data                   
+        ### Handle 'style' data                  
         style = group.get('style')
         if style:
             declarations = style.split(';')
@@ -538,7 +554,6 @@ class SVG_READER(inkex.Effect):
                         #group display is 'none' return without processing group
                         return
         ##############################################
-        
         if group.get(inkex.addNS('groupmode', 'inkscape')) == 'layer':
             style = group.get('style')
             if style:
@@ -548,7 +563,7 @@ class SVG_READER(inkex.Effect):
                         #layer display is 'none' return without processing layer
                         return
             layer = group.get(inkex.addNS('label', 'inkscape'))
-              
+            
             layer = layer.replace(' ', '_')
             if layer in self.layers:
                 self.layer = layer
@@ -670,17 +685,20 @@ class SVG_READER(inkex.Effect):
     def Make_PNG(self):
         #create OS temp folder
         tmp_dir = tempfile.mkdtemp()
-        
+        #tmp_dir = self.tempDir()
         if self.inkscape_exe != None:
             try:                
                 svg_temp_file = os.path.join(tmp_dir, "k40w_temp.svg")
                 png_temp_file = os.path.join(tmp_dir, "k40w_image.png")
-                dpi = "%d" %(self.image_dpi)           
+                dpi = "%d" %(self.image_dpi)
+                #print(dpi)
                 self.document.write(svg_temp_file)
+                #self.document.write("svg_temp_file.svg", encoding='utf-8')
 
                 # Check Version of Inkscape
                 cmd = [ self.inkscape_exe, "-V"]
                 (stdout,stderr)=run_external(cmd, self.timout)
+                #print(stdout)
                 if stdout.find(b'Inkscape 1.')==-1:
                     cmd = [ self.inkscape_exe, self.png_area, "--export-dpi", dpi, \
                             "--export-background","rgb(255, 255, 255)","--export-background-opacity", \
@@ -688,7 +706,7 @@ class SVG_READER(inkex.Effect):
                 else:
                     cmd = [ self.inkscape_exe, self.png_area, "--export-dpi", dpi, \
                             "--export-background","rgb(255, 255, 255)","--export-background-opacity", \
-                            "255" ,"--export-type=png", "--export-file", png_temp_file, svg_temp_file ]
+                            "255" ,"--export-type=png", "--export-filename=%s" %(png_temp_file), svg_temp_file ]
 
                 run_external(cmd, self.timout)
                 self.raster_PIL = Image.open(png_temp_file)
@@ -711,7 +729,8 @@ class SVG_READER(inkex.Effect):
 ##    def open_cdr_file(self,filename):
 ##        #create OS temp folder
 ##        svg_temp_file=filename
-##        tmp_dir = tempfile.mkdtemp()
+##        #tmp_dir = tempfile.mkdtemp()
+##        tmp_dir = self.tempDir()
 ##        if self.inkscape_exe != None:
 ##            try:
 ##                #svg_temp_file = os.path.join(tmp_dir, "k40w_temp.svg")
@@ -729,16 +748,48 @@ class SVG_READER(inkex.Effect):
 ##        except:
 ##            raise Exception("Temp dir failed to delete:\n%s" %(tmp_dir) )
 
+
+##    def tempDir(self):
+##        tmpdir = tempfile.mkdtemp()
+##        if os.path.isdir(tmpdir):
+##            print("first tmp dir exists")
+##            print(tmpdir)
+##            #raw_input("press any key...")
+##        else:
+##            print("try again")
+##            tmpdir_base = tempfile.gettempdir()
+##            print(tmpdir_base)
+##            tmpdir = tmpdir_base+"/k40whisperer"
+##            os.mkdir(tmpdir)
+##            if not os.path.isdir(tmpdir):
+##                print("still didn't work")
+##            #creatte folder intempdir
+##            #test if new dir exists
+##
+##        return tmpdir
+                
+
     def convert_text2paths(self):
         #create OS temp folder
         tmp_dir = tempfile.mkdtemp()
+        #tmp_dir = self.tempDir()
         if self.inkscape_exe != None:
             try:
                 svg_temp_file = os.path.join(tmp_dir, "k40w_temp.svg")
                 txt2path_file = os.path.join(tmp_dir, "txt2path.svg")         
                 self.document.write(svg_temp_file)
-                cmd = [ self.inkscape_exe, "--export-text-to-path","--export-plain-svg",txt2path_file, svg_temp_file ]
-                run_external(cmd, self.timout)
+
+                # Check Version of Inkscape
+                cmd = [ self.inkscape_exe, "-V"]
+                (stdout,stderr)=run_external(cmd, self.timout)
+                if stdout.find(b'Inkscape 1.')==-1:
+                    cmd = [ self.inkscape_exe, "--export-text-to-path","--export-plain-svg", \
+                            txt2path_file, svg_temp_file,  ]
+                else:
+                    cmd = [ self.inkscape_exe, "--export-text-to-path","--export-plain-svg", \
+                            "--export-filename=%s" %(txt2path_file), svg_temp_file,  ]
+                
+                (stdout,stderr)=run_external(cmd, self.timout)
                 self.parse_svg(txt2path_file)
             except Exception as e:
                 raise Exception("Inkscape Execution Failed (while converting text to paths).\n\n"+str(e))

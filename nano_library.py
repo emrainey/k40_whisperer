@@ -2,7 +2,7 @@
 '''
 This script comunicated with the K40 Laser Cutter.
 
-Copyright (C) 2017-2020 Scorch www.scorchworks.com
+Copyright (C) 2017-2023 Scorch www.scorchworks.com
 
 This program is free software; you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -45,16 +45,18 @@ class K40_CLASS:
         self.read_length= 168
 
         #### RESPONSE CODES ####
-        self.OK             = 206
-        self.BUFFER_FULL    = 238
-        self.CRC_ERROR      = 207
-        self.TASK_COMPLETE  = 236
-        self.UNKNOWN_2      = 239 #after failed initialization followed by succesful initialization
+        self.OK               = 206
+        self.BUFFER_FULL      = 238
+        self.CRC_ERROR        = 207
+        self.TASK_COMPLETE    = 236
+        self.UNKNOWN_2        = 239 #after failed initialization followed by succesful initialization
+        self.TASK_COMPLETE_M3 = 204
         #######################
         self.hello   = [160]
         self.unlock  = [166,0,73,83,50,80,70,70,70,70,70,70,70,70,70,70,70,70,70,70,70,70,70,70,70,70,70,70,70,70,70,70,166,15]
         self.home    = [166,0,73,80,80,70,70,70,70,70,70,70,70,70,70,70,70,70,70,70,70,70,70,70,70,70,70,70,70,70,70,70,166,228]
         self.estop  =  [166,0,73,70,70,70,70,70,70,70,70,70,70,70,70,70,70,70,70,70,70,70,70,70,70,70,70,70,70,70,70,70,166,130]
+        self.USB_Location = None
 
 
     def say_hello(self):
@@ -97,10 +99,11 @@ class K40_CLASS:
                 else:
                     print (".",)
             
-            if response[1]==self.OK            or \
-               response[1]==self.BUFFER_FULL   or \
-               response[1]==self.CRC_ERROR     or \
-               response[1]==self.TASK_COMPLETE or \
+            if response[1]==self.OK               or \
+               response[1]==self.BUFFER_FULL      or \
+               response[1]==self.CRC_ERROR        or \
+               response[1]==self.TASK_COMPLETE    or \
+               response[1]==self.TASK_COMPLETE_M3 or \
                response[1]==self.UNKNOWN_2:
                 return response[1]
             else:
@@ -124,10 +127,22 @@ class K40_CLASS:
     def release_usb(self):
         usb.util.dispose_resources(self.dev)
         self.dev = None
+        self.USB_Location = None
 
     def pause_un_pause(self):
-        self.send_data([ord('P'),ord('N')])
-    
+        try:
+            self.send_data([ord('P'),ord('N')])
+        except:
+            pass
+
+    def unfreeze(self):
+        try:
+            self.send_data([ord('F'),ord('N'),ord('S'),ord('E')])
+            #print("unfreeze sent")
+        except:
+            pass
+        
+        
     #######################################################################
     #  The one wire CRC algorithm is derived from the OneWire.cpp Library
     #  The latest version of this library may be found at:
@@ -159,7 +174,7 @@ class K40_CLASS:
         NoSleep = WindowsInhibitor()
         NoSleep.inhibit()
 
-        blank   = [166,0,70,70,70,70,70,70,70,70,70,70,70,70,70,70,70,70,70,70,70,70,70,70,70,70,70,70,70,70,70,70,166,0]
+        blank   = [166,0,70,70,70,70,70,70,70,70,70,70,70,70,70,70,70,70,70,70,70,70,70,70,70,70,70,70,70,70,70,70,166,80]
         packets = []
         packet  = blank[:]
         cnt=2
@@ -201,8 +216,13 @@ class K40_CLASS:
         packet[-1]=self.OneWireCRC(packet[1:len(packet)-2])
         if not preprocess_crc:
             self.send_packet_w_error_checking(packet,update_gui,stop_calc)
+            if cnt > 31:
+                self.send_packet_w_error_checking(blank,update_gui,stop_calc)
+            
         else:
             packets.append(packet)
+            if cnt > 31:
+                packets.append(blank[:])
             update_gui("CRC data and Packets are Ready")
         packet_cnt = 0
 
@@ -248,7 +268,7 @@ class K40_CLASS:
                 if timeout_cnt > 20:
                    # try reconnect to laser
                    try:
-                       self.initialize_device()
+                       self.initialize_device(self.USB_Location)
                    except:
                        pass
 
@@ -281,7 +301,7 @@ class K40_CLASS:
         FINISHED = False
         while not FINISHED:
             response = self.say_hello()
-            if response == self.TASK_COMPLETE:
+            if response == self.TASK_COMPLETE or response == self.TASK_COMPLETE_M3:
                 FINISHED = True
                 break
             elif response == None:
@@ -303,14 +323,29 @@ class K40_CLASS:
     def send_packet(self,line):
         self.dev.write(self.write_addr,line,self.timeout)
 
+    def print_command(self,data):
+        for x in data:
+            sys.stdout.write(chr(x))
+        sys.stdout.write("\n")
+
+        
     def rapid_move(self,dxmils,dymils):
         if (dxmils!=0 or dymils!=0):
             data=[]
             egv_inst = egv(target=lambda s:data.append(s))
             egv_inst.make_move_data(dxmils,dymils)
             self.send_data(data, wait_for_laser=False)
+
+    def detach_ch341_kernel_driver(self, device=None):
+        if sys.platform.startswith('linux') and device is not None:
+            if device.is_kernel_driver_active(0):
+                try:
+                    device.detach_kernel_driver(0)
+                    print('Device detached from ch341 linux driver')
+                except usb.core.USBError as e:
+                    print ("Could not detatch from ch341 linux driver: %s" % str(e))
     
-    def initialize_device(self,verbose=False):
+    def initialize_device(self,USB_Location=None,verbose=False):
         try:
             self.release_usb()
         except:
@@ -321,22 +356,42 @@ class K40_CLASS:
             exedir = os.path.dirname(sys.executable)
             os.environ['PATH'] = exedir + os.pathsep + os.environ['PATH']
             
-        # find the device
-        self.dev = usb.core.find(idVendor=0x1a86, idProduct=0x5512)
+        # Find a laser device
+        self.dev = None
+        laser_cnt=0
+        if USB_Location == None:
+            for device in usb.core.find(idVendor=0x1a86, idProduct=0x5512, find_all=True):
+                self.dev=device
+                try:
+                    # detach device from linux kernel driver
+                    self.detach_ch341_kernel_driver(device=self.dev)
+                    # set the active configuration. With no arguments, the first
+                    # configuration will be the active one
+                    self.dev.set_configuration()
+                    if (self.say_hello()!=None):
+                        self.USB_Location = (self.dev.bus,self.dev.address)
+                        break
+                except:
+                    self.dev = None
+        else:
+            self.dev = usb.core.find(idVendor=0x1a86, idProduct=0x5512, bus=USB_Location[0], address=USB_Location[1])
+            #  detach device from linux kernel driver
+            self.detach_ch341_kernel_driver(device=self.dev)
+            self.dev.set_configuration()
+            self.USB_Location = (self.dev.bus,self.dev.address)
+        
         if self.dev is None:
             raise Exception("Laser USB Device not found. (libUSB driver may not be installed)")
-            #return "Laser USB Device not found."
 
         if verbose:
             print("-------------- dev --------------")
             print(self.dev)
         # set the active configuration. With no arguments, the first
         # configuration will be the active one
-        try:
-            self.dev.set_configuration()
-        except:
-            #return "Unable to set USB Device configuration."
-            raise Exception("Unable to set USB Device configuration.")
+        #try:
+        #    self.dev.set_configuration()
+        #except:
+        #    raise Exception("Unable to set USB Device configuration.")
 
         # get an endpoint instance
         cfg = self.dev.get_active_configuration()
@@ -367,30 +422,32 @@ class K40_CLASS:
             print ("---------- ctrlxfer ------------")
             print (ctrlxfer)
 
-        #return True
-        
+        return self.USB_Location
+    
     def hex2dec(self,hex_in):
         #format of "hex_in" is ["40","e7"]
         dec_out=[]
         for a in hex_in:
             dec_out.append(int(a,16))
         return dec_out
-    
 
 if __name__ == "__main__":
     k40=K40_CLASS()
     run_laser = False
 
     try:
-        k40.initialize_device(verbose=True)
+        USB_LOCATION=k40.initialize_device(verbose=False)
+        
     # the following does not work for python 2.5
     except RuntimeError as e: #(RuntimeError, TypeError, NameError, StandardError):
         print(e)    
         print("Exiting...")
         os._exit(0) 
+    
+    print('initialize with location=',USB_LOCATION)
+    k40.initialize_device(k40.USB_Location,verbose=False)
 
-    #k40.initialize_device()
-    print (k40.say_hello())
+    print('hello',k40.say_hello())
     #print k40.reset_position()
     #print k40.unlock_rail()
     print ("DONE")

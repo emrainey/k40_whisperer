@@ -2,7 +2,7 @@
 '''
 This script reads/writes egv format
 
-Copyright (C) 2017-2019 Scorch www.scorchworks.com
+Copyright (C) 2017-2022 Scorch www.scorchworks.com
 
 This program is free software; you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
@@ -103,22 +103,6 @@ class egv:
                 self.write(self.OFF)
             self.Modal_on   = laser_on
         self.Modal_dist = 0
-
-        
-    #  The one wire CRC algorithm is derived from the OneWire.cpp Library
-    #  The library location: http://www.pjrc.com/teensy/td_libs_OneWire.html
-    def OneWireCRC(self,line):
-        crc=0
-        for i in range(len(line)):
-            inbyte=line[i]
-            for j in range(8):
-                mix = (crc ^ inbyte) & 0x01
-                crc >>= 1
-                if (mix):
-                    crc ^= 0x8C
-                inbyte >>= 1
-        return crcS
-
 
     def make_distance(self,dist_mils):
         dist_mils=float(dist_mils)
@@ -326,10 +310,19 @@ class egv:
             lastx,lasty,last_loop = self.ecoord_adj(ecoords_in[0],scale,FlipXoffset)
             if not Rapid_Feed_Rate:
                 self.make_dir_dist(lastx-startX,lasty-startY)
+
             self.flush(laser_on=False)
             self.write(ord("N"))
-            self.write(ord("R"))
-            self.write(ord("B"))
+            if lasty-startY <= 0:
+                self.write(self.DOWN)
+            else:
+                self.write(self.UP)
+                
+            if lastx-startX >= 0:
+                self.write(self.RIGHT)
+            else:
+                self.write(self.LEFT)
+                
             # Insert "S1E"
             self.write(ord("S"))
             self.write(ord("1"))
@@ -689,6 +682,7 @@ class egv:
         self.write(ord("S"))
         self.write(ord("1"))
         self.write(ord("E"))
+        self.write(ord("U"))
 
         if pad:
             self.make_dir_dist(cspad,cspad)
@@ -696,13 +690,27 @@ class egv:
         
         if laser_on:    
             self.write(self.ON)
+
+    def strip_redundant_codes(self, EGV_data):
+        E = ord('E')
+        new_data=[]
+        modal_value = -1
+        for code in EGV_data:
+            if code == modal_value and modal_value != E:
+                continue
+            elif (code == self.RIGHT) or (code == self.LEFT) or \
+                 (code == self.UP   ) or (code == self.DOWN) or \
+                 (code == self.ANGLE) or (code == E):
+                modal_value = code
+            new_data.append(code)
+        return new_data
             
         
 if __name__ == "__main__":
     EGV=egv()
     bname = "LASER-M2"
     values  = [.1,.2,.3,.4,.5,.6,.7,.8,.9,1,2,3,4,5,6,7,8,9,10,20,30,40,50,70,90,100]
-    step=2
+    step=0
     for value_in in values:
         #print ("% 8.2f" %(value_in),": ",end='')
         val=EGV.make_speed(value_in,board_name=bname,Raster_step=step)
